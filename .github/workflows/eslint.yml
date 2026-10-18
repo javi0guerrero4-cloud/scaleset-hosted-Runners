@@ -1,0 +1,70 @@
+#- name: Setup Go environment
+  uses: actions/setup-go@v7.0.0
+  with:
+    # The Go version to download (if necessary) and use. Supports semver spec and ranges. Be sure to enclose this option in single quotation marks.
+    go-version: # optional
+    # Path to the go.mod, go.work, .go-version, or .tool-versions file.
+    go-version-file: # optional
+    # Set this option to true if you want the action to always check for the latest available version that satisfies the version spec
+    check-latest: # optional
+    # Used to pull Go distributions from go-versions. Since there's a default, this is typically not supplied by the user. When running this action on github.com, the default value is sufficient. When running on GHES, you can pass a personal access token for github.com if you are experiencing rate limiting.
+    token: # optional, default is ${{ github.server_url == 'https://github.com' && github.token || '' }}
+    # Used to specify whether caching is needed. Set to true, if you'd like to enable caching.
+    cache: # optional, default is true
+    # Used to specify the path to a dependency file (e.g., go.mod, go.sum)
+    cache-dependency-path: # optional
+    # Target architecture for Go to use. Examples: x86, x64. Will use system architecture by default.
+    architecture: # optional
+    # Custom base URL for downloading Go distributions. Use this to download Go from a mirror or custom source. Defaults to "https://go.dev/dl". Can also be set via the GO_DOWNLOAD_BASE_URL environment variable. The input takes precedence over the environment variable.
+    go-download-base-url: # optional This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+# ESLint is a tool for identifying and reporting on patterns
+# found in ECMAScript/JavaScript code.
+# More details at https://github.com/eslint/eslint
+# and https://eslint.org
+
+name: ESLint
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    # The branches below must be a subset of the branches above
+    branches: [ "main" ]
+  schedule:
+    - cron: '34 13 * * 6'
+
+jobs:
+  eslint:
+    name: Run eslint scanning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ESLint
+        run: |
+          npm install eslint@8.10.0
+          npm install @microsoft/eslint-formatter-sarif@3.1.0
+
+      - name: Run ESLint
+        env:
+          SARIF_ESLINT_IGNORE_SUPPRESSED: "true"
+        run: npx eslint .
+          --config .eslintrc.js
+          --ext .js,.jsx,.ts,.tsx
+          --format @microsoft/eslint-formatter-sarif
+          --output-file eslint-results.sarif
+        continue-on-error: true
+
+      - name: Upload analysis results to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: eslint-results.sarif
+          wait-for-processing: true
