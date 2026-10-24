@@ -96,6 +96,8 @@ See [`types.go`](./types.go) for payload definitions.
 2. Otherwise, the request blocks for up to ~50 seconds.
 3. If no messages arrive, a 202 response is returned (`nil, nil` in the Go client).
 
+Each poll waits at most `MessagePollTimeout` (2 minutes). That is above the ~50 second hold, with room if the service holds the poll longer. A stuck connection fails there instead of sitting for the 5 minute client timeout. If the session token has expired, the refresh is separate and the retry gets a new window of the same length. A `*http.Client` with a shorter timeout is not used as-is for a poll: the SDK copies it and raises the copy. The client you passed is not modified. A custom `HTTPClient` must allow an attempt of at least `MessagePollTimeout`.
+
 Poll again immediately after handling each response.
 
 ### Message Acknowledgment
@@ -198,6 +200,147 @@ Assigning more than one label to a scale set is supported on **GHES 3.18 and lat
   ```
 
 - **GHES 3.21 and later:** the flag is **on by default**, no action required.
+
+---
+
+## HTTP Transport and Retries
+
+Transport belongs to you; retries belong to the SDK.
+
+`WithHTTPClient` accepts anything with a `Do(*http.Request) (*http.Response, error)` method, including `*http.Client`. The SDK never writes to the client, its `Transport`, or its `tls.Config`, so TLS, proxies, connection pooling, and per-attempt timeouts stay under your control. The one exception is `GetMessage`: it bounds each poll attempt by `MessagePollTimeout`, and polls through a copy of an `*http.Client` whose shorter `Timeout` is raised to that value. The SDK calls `Do` concurrently, sharing one client across a `Client`, its message sessions, and goroutines, so a custom implementation must be safe for concurrent use, as `*http.Client` is.
+
+```go
+httpClient := &http.Client{
+    // A bare http.Client has no timeout. DefaultTimeout is the 5 minute
+    // per-attempt timeout the SDK used to set. GetMessage does not use a
+    // shorter value on this client: each poll attempt waits up to
+    // MessagePollTimeout.
+    Timeout:   scaleset.DefaultTimeout,
+    Transport: myInstrumentedTransport,
+}
+
+client, err := scaleset.NewClientWithPersonalAccessToken(config,
+    scaleset.WithHTTPClient(httpClient),
+)
+```
+
+If you don't want to assemble a transport by hand, `NewHTTPClient` builds a sensible `*http.Client` for the common cases. Leaving `Timeout` unset applies `DefaultTimeout` (5 minutes), the same client timeout as before:
+
+```go
+httpClient := scaleset.NewHTTPClient(scaleset.HTTPClientConfig{
+    RootCAs:      myCertPool,
+    Certificates: []tls.Certificate{myClientCert}, // mTLS
+})
+```
+
+Retries are layered above the client and keep their state per request, which is what lets the SDK vary the policy for an individual call without touching shared state. `WithRetry` replaces the policy wholesale, so start from `DefaultRetryConfig` when tweaking:
+
+```go
+retry := scaleset.DefaultRetryConfig()
+retry.Max = 8
+
+client, err := scaleset.NewClientWithPersonalAccessToken(config,
+    scaleset.WithRetry(retry),
+)
+```
+
+`RetryConfig{}` (or `Max: 0`) disables retries entirely.
+
+`RetryConfig.MaxElapsed` optionally limits each HTTP request, including all
+attempts, waits, and reading the final response body. Zero leaves it unlimited.
+A wait that would reach or pass this budget or the request context's deadline is
+skipped, preserving the last response and any `RateLimitError.RetryAfter` hint.
+If the budget expires during an attempt or body read, the error matches both
+`MaxElapsedExceededError` and `context.DeadlineExceeded`. If the caller cancels or
+its deadline fires first, its context error is preserved instead.
+
+### Rate limits
+
+By default, transport errors, 5xx responses (except 501), and 429 responses are retried up to 4 times with exponential backoff. A 429 waits for its full `Retry-After`; a rate-limited 403 is not retried, except on the admin token exchange that already retries 401/403. A wait that would reach or pass the context deadline is skipped, and the last response is returned instead of a context error.
+
+A rate-limited response (any 429, or a 403 carrying `Retry-After`, `X-RateLimit-Remaining: 0`, or a secondary-limit message) comes back as a `*RateLimitError`:
+
+```go
+var rl *scaleset.RateLimitError
+if errors.As(err, &rl) {
+    // rl.Kind       RateLimitPrimary (spent quota, no secondary-limit message) or RateLimitSecondary
+    // rl.StatusCode 429 or 403
+    // rl.RetryAfter how long the server asked to wait, from Retry-After or X-RateLimit-Reset
+    // rl.Reset      when the rate limit window resets, from X-RateLimit-Reset
+    // rl.Retries    rate-limited retries the SDK already made for this request
+}
+```
+
+`RetryConfig.OnRateLimit` decides whether and how long to wait on a rate-limited response, in place of `ShouldRetry`. A zero wait with `retry=true` uses `Backoff`. `RateLimitRetries` builds a hook from a rule per kind. Set it client-wide with `WithRetry`:
+
+```go
+retry := scaleset.DefaultRetryConfig()
+retry.OnRateLimit = scaleset.RateLimitRetries(
+    scaleset.RateLimitRule{},                                     // primary: return immediately
+    scaleset.RateLimitRule{MaxRetries: 2, MaxWait: 5 * time.Second}, // secondary: short retry
+)
+
+client, err := scaleset.NewClientWithPersonalAccessToken(config,
+    scaleset.WithRetry(retry),
+)
+```
+
+The hook and final error use the same classification, including secondary-limit
+messages in JSON or plain-text 403/429 bodies. Read and close failures remain in
+the final error chain. `RateLimitError.Retries` counts
+the rate-limited retries already made for this request, across both kinds;
+transport and other HTTP retries do not increase it. A server hint longer than
+`MaxWait` is rejected, not shortened. `Max`, `MaxElapsed`, and the context
+deadline still bound retries. Hooks may run concurrently.
+
+When requeuing rate-limited work, preserve a positive `RetryAfter` hint and
+use a positive fallback (for example, one minute) when it is zero.
+In controller-runtime, `RequeueAfter: 0` with a nil error schedules no retry.
+
+To change the policy for one call only, wrap its context with `WithRequestRetry`. The function gets a copy of the client's `RetryConfig`, so other calls, including concurrent ones on the same `Client`, keep the client's policy. A controller can give up on a rate limit quickly and requeue the work instead of blocking:
+
+```go
+ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+defer cancel()
+
+ctx = scaleset.WithRequestRetry(ctx, func(c *scaleset.RetryConfig) {
+    c.OnRateLimit = scaleset.RateLimitRetries(
+        scaleset.RateLimitRule{},                                     // primary: return immediately
+        scaleset.RateLimitRule{MaxRetries: 2, MaxWait: 5 * time.Second}, // secondary: short retry
+    )
+    c.MaxElapsed = 20 * time.Second
+})
+
+jit, err := client.GenerateJitRunnerConfig(ctx, setting, scaleSetID)
+var rl *scaleset.RateLimitError
+if errors.As(err, &rl) {
+    return ctrl.Result{RequeueAfter: max(rl.RetryAfter, minBackoff)}, nil
+}
+```
+
+`WithRequestRetry` works with every `Client` and `MessageSessionClient` method, and nested calls apply outer first. A `MaxElapsed` set this way applies to each HTTP request the call makes; the context deadline bounds the whole call. The SDK's own per-request adjustments run after yours, so replacing `ShouldRetry` does not stop the admin token exchange from retrying 401 and 403 within your `Max`. A rate-limited 403 is the exception: an `OnRateLimit` you set still decides it. `GetMessage` bounds each poll attempt by `MessagePollTimeout`; retries get a new window, so only the context deadline bounds the whole call.
+
+### Migrating from the transport options
+
+If you never passed an HTTP option, you change no code. The constructors are the same, and the defaults are the same.
+
+That path did not have the shared-client race. With no custom client, each call built its own HTTP client, so token refresh had nothing shared to write. The race only happened when `WithRetryableHTTPClint` made every call share one client.
+
+Change code only if you used one of the options below. Four things still differ for everyone: a retry that runs out returns the final response instead of `"giving up after N attempts"`, each `GetMessage` poll attempt times out after `MessagePollTimeout` (2 minutes) instead of the 5 minute client timeout and is then retried like any other failed attempt, a redirect loop, a bad scheme, or an invalid header can be retried, and `DefaultBackoff` adds up to 50% random jitter to each exponential delay, so a retry can wait somewhat longer than before (still capped at `WaitMax`). Certificate errors still are not retried.
+
+`WithRetry` replaces the policy wholesale. Start from `DefaultRetryConfig()` and change the field you care about. A literal `RetryConfig{WaitMax: d}` also sets `Max` to 0, which disables retries.
+
+| Removed | Replacement |
+| --- | --- |
+| `WithRetryableHTTPClint(c)` | `WithHTTPClient(c.HTTPClient)` — retries move to `WithRetry`. retryablehttp's client has no `Timeout`, which the SDK used to raise to 5 minutes; set `c.HTTPClient.Timeout = scaleset.DefaultTimeout` to keep that limit |
+| `WithRetryMax(n)` | `retry := DefaultRetryConfig(); retry.Max = n`; `WithRetry(retry)` |
+| `WithRetryWaitMax(d)` | `retry := DefaultRetryConfig(); retry.WaitMax = d`; `WithRetry(retry)`. `WaitMax: 0` now means `DefaultRetryWaitMax`; for the old `WithRetryWaitMax(0)` (retry immediately, still honoring `Retry-After`), use `time.Nanosecond` |
+| `WithTimeout(d)` | `NewHTTPClient(HTTPClientConfig{Timeout: d})`. Unset or `0` now means `DefaultTimeout` (5 minutes); for the old `WithTimeout(0)` (no timeout), set `Timeout = 0` on the returned client |
+| `WithProxy(f)` | `NewHTTPClient(HTTPClientConfig{Proxy: f})` |
+| `WithRootCAs(pool)` | `NewHTTPClient(HTTPClientConfig{RootCAs: pool})` |
+| `WithoutTLSVerify()` | `NewHTTPClient(HTTPClientConfig{InsecureSkipVerify: true})` |
+| `WithTLSClientCertificate(cert)` | `NewHTTPClient(HTTPClientConfig{Certificates: []tls.Certificate{cert}})` |
+| `WithTLSClientCertificateFromFile(c, k)` | `tls.LoadX509KeyPair` + `Certificates` |
 
 ---
 
