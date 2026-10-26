@@ -37,6 +37,10 @@ func main() {
 	}()
 
 	mux := http.NewServeMux()
+	// Answer the browser's automatic favicon request instead of 404-ing it.
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.Handle("/", newPageHandler(stub, baseURL+"/myorg"))
 
 	log.Printf("preview page listening on %s", *addr)
