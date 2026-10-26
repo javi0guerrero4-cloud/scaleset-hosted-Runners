@@ -1,0 +1,50 @@
+# Development environment for the Base44 sandbox.
+#
+# This repository is a Go client library: there is no application server to
+# run and no database to provision. The `preview` service therefore runs
+# hack/base44preview, a small harness that serves a demo page on port 3000 and
+# drives the real client through a complete runner scale set flow against a
+# stand-in for the GitHub Actions API running inside the same container.
+#
+# The source tree is bind mounted, so edits are picked up on the next restart.
+# See AGENTS.md for how to run the tests and the example.
+services:
+  preview:
+    # Must satisfy the `go` directive in go.mod: the official Go images set
+    # GOTOOLCHAIN=local, so an older image refuses to build instead of
+    # downloading the required toolchain.
+    image: golang:1.27-bookworm
+    working_dir: /src
+    # Go has no hot reload: the server is compiled and started once. Restart
+    # this service (and reload the preview) after changing Go code.
+    command:
+      - sh
+      - -ec
+      - exec go run ./hack/base44preview -addr :3000 -stub-addr 127.0.0.1:8081
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/src
+      # Module and build caches live in named volumes so the first boot does
+      # not re-download dependencies and rebuild the world.
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      - CGO_ENABLED=0
+    restart: on-failure
+    labels:
+      base44.project: "scaleset preview"
+      base44.kind: web
+      base44.port: "3000"
+    healthcheck:
+      # The demo page runs the whole client flow on every request, so a 200
+      # means the library and the stand-in API both work.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 120s
+
+volumes:
+  go-mod-cache:
+  go-build-cache:
