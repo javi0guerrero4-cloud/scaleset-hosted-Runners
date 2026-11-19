@@ -48,6 +48,24 @@ Notes:
   HTTP server that binds `:3000` and performs no host or origin checking, so no
   allowlists had to be widened and `BASE44_PREVIEW_MODE` is unused.
 
+## Secrets and environment variables
+
+The preview needs **no credentials**: the flow runs against the in-process
+stand-in, so nothing is created on GitHub and no secret is required to boot.
+`.base44/environment.json` therefore declares an empty `secrets` list.
+
+Values configured in the dashboard are delivered to `/run/base44/app.env`
+(outside the repo, never committed) and reach the preview process through the
+`preview` service's `env_file:` entry. That entry is `required: false`, so the
+stack still boots on a sandbox where no secrets have been set.
+
+The only environment variables the code reads are optional:
+
+- `GITHUB_ACTIONS_FORCE_GHES` — forces the GitHub Enterprise Server code path.
+- `E2E` and the `E2E_SCALESET_*` variables — inputs for the opt-in live e2e
+  suite (`examples/dockerscaleset/e2e_test.go`), which talks to a real GitHub
+  target and is not run from this sandbox.
+
 ## Tests
 
 The suite is the project's own `script/test` (`go test ./...`), which CI runs

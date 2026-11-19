@@ -31,6 +31,12 @@ services:
       - go-build-cache:/root/.cache/go-build
     environment:
       - CGO_ENABLED=0
+    env_file:
+      # Secrets and environment variables configured in the dashboard are
+      # delivered here, outside the repository. Optional, because the preview
+      # needs no credentials and must boot on a sandbox with none configured.
+      - path: /run/base44/app.env
+        required: false
     restart: on-failure
     labels:
       base44.project: "scaleset preview"
