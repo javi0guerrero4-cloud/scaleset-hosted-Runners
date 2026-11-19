@@ -1,0 +1,77 @@
+# Development environment for the Base44 sandbox.
+#
+# This repository is a Go client library, so it has no application server of its
+# own. The preview runs the supervisor example - a real command that supervises
+# a runner scale set - against hack/githubstub, a stand-in for GitHub's API
+# running in its own container. Nothing leaves the sandbox and no credentials
+# are needed.
+#
+# The source tree is bind mounted, so edits are picked up on the next restart.
+# Go has no hot reload: restart the service after changing Go code. See
+# AGENTS.md for tests and for how the two services fit together.
+services:
+  stub:
+    image: golang:1.27-bookworm
+    working_dir: /src
+    command:
+      - sh
+      - -ec
+      - exec go run ./hack/githubstub -addr 0.0.0.0:8081 -advertise http://stub:8081 -workload
+    volumes:
+      - .:/src
+      # Module and build caches live in named volumes so the first boot does
+      # not re-download dependencies and rebuild the world.
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      - CGO_ENABLED=0
+    restart: on-failure
+    labels:
+      base44.project: "github stand-in"
+      base44.kind: infra
+      base44.port: "8081"
+    healthcheck:
+      # The runner group endpoint is the first call the client makes.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8081/tenant/1/_apis/runtime/runnergroups/?groupName=default"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
+  supervisor:
+    image: golang:1.27-bookworm
+    working_dir: /src
+    # The real example command, pointed at the stand-in. It creates the scale
+    # set, opens a message session and serves the live view on port 3000.
+    command:
+      - sh
+      - -ec
+      - exec go run ./examples/supervisor -url http://stub:8081/sandbox -token sandbox-token -name base44-preview -runner-group default -min-runners 1 -max-runners 4 -addr :3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      stub:
+        condition: service_healthy
+    volumes:
+      - .:/src
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      - CGO_ENABLED=0
+    restart: on-failure
+    labels:
+      base44.project: "scaleset supervisor"
+      base44.kind: web
+      base44.port: "3000"
+    healthcheck:
+      # /api/state is what the live view polls, so a 200 means the supervisor
+      # is up and has state to render.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/state"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+volumes:
+  go-mod-cache:
+  go-build-cache:
