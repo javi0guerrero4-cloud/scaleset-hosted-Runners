@@ -54,6 +54,10 @@ type config struct {
 	token             string
 }
 
+// maxRecoveries bounds how often a scale set that disappeared underneath a
+// running supervisor is recreated before the error is treated as fatal.
+const maxRecoveries = 5
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("supervisor stopped", "error", err)
@@ -75,6 +79,32 @@ func run() error {
 		return err
 	}
 
+	// A scale set can disappear underneath a running supervisor, which the API
+	// answers with 404. Recreate it and open a new session instead of giving
+	// up, so a restart of the server the supervisor talks to only costs the
+	// session. Any other error, or repeated losses, is fatal.
+	for recovery := 0; ; recovery++ {
+		err := supervise(ctx, client, cfg, logger)
+		if err == nil || ctx.Err() != nil {
+			return err
+		}
+		if !errors.Is(err, scaleset.NotFoundError) || recovery >= maxRecoveries {
+			return err
+		}
+
+		logger.Warn("scale set is gone, recreating it and reopening the session", "error", err, "recovery", recovery+1)
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(time.Duration(recovery+1) * time.Second):
+		}
+	}
+}
+
+// supervise creates or reuses the scale set, opens a message session and runs
+// the supervisor and its live view until either stops.
+func supervise(ctx context.Context, client *scaleset.Client, cfg config, logger *slog.Logger) error {
 	runnerGroup, err := client.GetRunnerGroupByName(ctx, cfg.runnerGroup)
 	if err != nil {
 		return fmt.Errorf("look up runner group %q: %w", cfg.runnerGroup, err)
@@ -132,15 +162,18 @@ func run() error {
 		}
 	}()
 
+	// Shut everything down before returning, including on an error: a caller
+	// that retries needs the live view's port released.
+	var runErr error
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")
 	case err := <-listenerErr:
 		if err != nil && !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("listener stopped: %w", err)
+			runErr = fmt.Errorf("listener stopped: %w", err)
 		}
 	case err := <-serverErr:
-		return fmt.Errorf("live view stopped: %w", err)
+		runErr = fmt.Errorf("live view stopped: %w", err)
 	}
 
 	cancel()
@@ -151,11 +184,13 @@ func run() error {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("shutting the live view down", "error", err)
 	}
-	if err := sessionClient.Close(shutdownCtx); err != nil {
+	// A session whose scale set is already gone cannot be deleted, which is
+	// exactly the case the caller recovers from.
+	if err := sessionClient.Close(shutdownCtx); err != nil && !errors.Is(err, scaleset.NotFoundError) {
 		logger.Warn("deleting the message session", "error", err)
 	}
 
-	return nil
+	return runErr
 }
 
 func parseFlags() config {

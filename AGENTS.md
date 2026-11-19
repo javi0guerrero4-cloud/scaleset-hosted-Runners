@@ -42,6 +42,10 @@ Notes:
   container.
 - Neither service checks Host or Origin, so no allowlists had to be widened and
   `BASE44_PREVIEW_MODE` is unused.
+- The stand-in's state is in memory, so restarting `stub` makes the supervisor's
+  scale set disappear. The example handles that: it logs a warning, recreates
+  the scale set and reopens the session, so the preview recovers on its own in
+  a couple of seconds instead of exiting.
 
 ## Tests
 
