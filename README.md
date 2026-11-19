@@ -354,7 +354,30 @@ Change code only if you used one of the options below. Four things still differ 
 
 ## Requirements
 
-- Go 1.25 or later
+- Go 1.27.3 or later — the version declared by the `go` directive in [`go.mod`](./go.mod)
+
+### Troubleshooting: `go.mod requires go >= X`
+
+If the build fails immediately with:
+
+```text
+go: go.mod requires go >= 1.27.3 (running go 1.26.10; GOTOOLCHAIN=local)
+```
+
+your local toolchain is older than the `go` directive in `go.mod`, and automatic
+toolchain downloads are switched off (`GOTOOLCHAIN=local`, which the official Go
+Docker images set). Pick one of these fixes:
+
+1. **Upgrade Go** to the version in `go.mod` (`grep '^go ' go.mod`).
+2. **Let Go fetch the required toolchain**: `GOTOOLCHAIN=auto go build ./...`
+   (needs network access to `proxy.golang.org`).
+3. **In Docker**, use an image tag that satisfies it — `golang:1.27-bookworm`
+   rather than `golang:1.26-bookworm`. The sandbox preview pins this in
+   `docker-compose.base44.yml`.
+
+A dependency-update PR that bumps the `go` directive raises the requirement for
+everyone, so re-check your toolchain (and any pinned CI or container image)
+after pulling one.
 
 ---
 
