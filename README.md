@@ -352,6 +352,89 @@ Change code only if you used one of the options below. Four things still differ 
 
 ---
 
+## Environment Variables
+
+### Local development
+
+No environment variables are needed to build the library or run the unit tests:
+
+```bash
+go build ./...
+go test ./...
+```
+
+The library itself reads one optional variable:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GITHUB_ACTIONS_FORCE_GHES` | unset | When set to any value, `github.com`, `www.github.com`, `github.localhost` and `*.ghe.com` hosts are treated as GitHub Enterprise Server endpoints instead of GitHub.com. Handy when pointing the client at a GHES-style API on a local host. |
+
+### E2E testing
+
+The end-to-end suite in [`examples/dockerscaleset/e2e_test.go`](./examples/dockerscaleset/e2e_test.go) is opt-in and **skipped unless `E2E=true`**. It is not a mocked test: it builds and runs the example CLI, which registers a **real** runner scale set on a real GitHub target, starts Docker containers for the runners, dispatches a workflow run and waits for it to finish. Point it at a dedicated test repository, never production, and make sure a Docker daemon is available.
+
+Run it from the example directory:
+
+```bash
+cd examples/dockerscaleset
+go test -run TestE2E -v ./...
+```
+
+#### Required
+
+| Variable | Purpose |
+| --- | --- |
+| `E2E` | Must be exactly `true`; any other value (or unset) skips the test. |
+| `E2E_SCALESET_URL` | Target the CLI registers the scale set on, e.g. `https://github.com/my-org/my-repo`. |
+| `E2E_SCALESET_NAME` | Name of the scale set to create. Keep it unique per run — CI appends a timestamp and random number. |
+| `E2E_WORKFLOW_TARGET_ORG` | Organization owning the workflow the test dispatches. |
+| `E2E_WORKFLOW_TARGET_REPO` | Repository in that organization containing the workflow. |
+| `E2E_WORKFLOW_TARGET_FILE` | Workflow file to dispatch, e.g. `basic.yaml`. It must exist on the default branch. |
+| `E2E_WORKFLOW_GITHUB_TOKEN` | Token the test uses to dispatch the workflow run and poll its status. |
+
+#### Credentials — provide one of the two
+
+**GitHub App (preferred).** All three must be set; if any is empty the test falls back to the token below.
+
+| Variable | Purpose |
+| --- | --- |
+| `E2E_SCALESET_GITHUB_APP_CLIENT_ID` | App client ID. |
+| `E2E_SCALESET_GITHUB_APP_INSTALLATION_ID` | Installation ID (must parse as an integer). |
+| `E2E_SCALESET_GITHUB_APP_PRIVATE_KEY_PATH` | Path to the App private key (PEM) readable by the process running the CLI. |
+
+**Personal access token.**
+
+| Variable | Purpose |
+| --- | --- |
+| `E2E_SCALESET_GITHUB_TOKEN` | Used when the App credentials are incomplete. The test fails if this is empty too. |
+
+#### Optional
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `E2E_SCALESET_RUNNER_GROUP` | unset | Runner group to create the scale set in. |
+| `E2E_SCALESET_MIN_RUNNERS` | `0` | Pre-provisioned runners. Must be `>= 0`. |
+| `E2E_SCALESET_MAX_RUNNERS` | `10` | Maximum runners. Must be `>= E2E_SCALESET_MIN_RUNNERS`. |
+
+#### Example
+
+```bash
+export E2E=true
+export E2E_SCALESET_URL="https://github.com/my-org/my-repo"
+export E2E_SCALESET_NAME="local-$(date +%s)"
+export E2E_WORKFLOW_TARGET_ORG="my-org"
+export E2E_WORKFLOW_TARGET_REPO="my-repo"
+export E2E_WORKFLOW_TARGET_FILE="basic.yaml"
+export E2E_WORKFLOW_GITHUB_TOKEN="$MY_TEST_PAT"
+export E2E_SCALESET_GITHUB_TOKEN="$MY_TEST_PAT"
+
+cd examples/dockerscaleset && go test -run TestE2E -v ./...
+```
+
+The tokens need permission to administer runner scale sets on the target and to dispatch workflows in the target repository. [`.github/workflows/e2e.yaml`](./.github/workflows/e2e.yaml) is a working reference that sets all of these for CI.
+
+---
+
 ## Requirements
 
 - Go 1.27.3 or later — the version declared by the `go` directive in [`go.mod`](./go.mod)
