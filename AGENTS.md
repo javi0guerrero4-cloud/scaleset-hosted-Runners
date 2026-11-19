@@ -23,6 +23,10 @@ crypto price dashboard lives in `examples/cryptoprices`.
   demo key; the app works without it.
 - Coins are configured with the `COINS` env var (comma-separated CoinGecko ids);
   the server ranks them by market cap.
+- Every successful refresh atomically rewrites `DATA_FILE` (default
+  `data/prices.json`, git-ignored) with raw numeric prices, and serves it at
+  `GET /data/prices.json`. A write failure is logged and does not stop the
+  dashboard.
 - Verify: `curl -s localhost:3000/healthz` returns `ok` and
   `curl -s localhost:3000/api/prices` returns `coins` with `price`/`change`
   strings.

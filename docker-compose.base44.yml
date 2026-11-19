@@ -21,6 +21,7 @@ services:
       - PORT=3000
       - COINS=${COINS:-bitcoin,ethereum,solana,binancecoin,ripple,cardano,dogecoin,avalanche-2,chainlink,polkadot,litecoin,tron}
       - REFRESH_SECONDS=${REFRESH_SECONDS:-60}
+      - DATA_FILE=data/prices.json
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1"]
       interval: 15s

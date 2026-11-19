@@ -28,6 +28,7 @@ type config struct {
 	refresh    time.Duration
 	apiBaseURL string
 	apiKey     string
+	dataFile   string
 }
 
 func loadConfig() config {
@@ -36,6 +37,7 @@ func loadConfig() config {
 		refresh:    60 * time.Second,
 		apiBaseURL: envOr("COINGECKO_API_URL", "https://api.coingecko.com"),
 		apiKey:     os.Getenv("COINGECKO_API_KEY"),
+		dataFile:   envOr("DATA_FILE", "data/prices.json"),
 	}
 
 	if v := os.Getenv("REFRESH_SECONDS"); v != "" {
@@ -87,6 +89,7 @@ func main() {
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("GET /api/prices", handlePrices(st))
+	mux.HandleFunc("GET /data/prices.json", handleDataFile(cfg.dataFile))
 	mux.Handle("GET /", noStore(http.FileServer(http.FS(web))))
 
 	addr := ":" + cfg.port
@@ -117,13 +120,10 @@ type apiResponse struct {
 
 func handlePrices(st *store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		st.RefreshIfStale(ctx)
+		cancel()
 		snap := st.Snapshot()
-		if len(snap.Coins) == 0 || time.Since(snap.UpdatedAt) > st.ttl {
-			ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
-			_ = st.Refresh(ctx)
-			cancel()
-			snap = st.Snapshot()
-		}
 
 		resp := apiResponse{Coins: snap.Coins, Error: snap.Err}
 		if resp.Coins == nil {
@@ -137,6 +137,14 @@ func handlePrices(st *store) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func handleDataFile(path string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		http.ServeFile(w, r, path)
 	}
 }
 

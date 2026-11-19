@@ -4,3 +4,6 @@
 # Test and coverage output
 *.test
 *.out
+
+# Generated crypto price data
+/examples/cryptoprices/data/

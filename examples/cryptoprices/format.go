@@ -26,12 +26,17 @@ type viewCoin struct {
 	Points    string `json:"points"`
 }
 
-func buildViews(coins []marketCoin) []viewCoin {
+func sortByMarketCap(coins []marketCoin) []marketCoin {
 	sorted := make([]marketCoin, len(coins))
 	copy(sorted, coins)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].MarketCap > sorted[j].MarketCap
 	})
+	return sorted
+}
+
+func buildViews(coins []marketCoin) []viewCoin {
+	sorted := sortByMarketCap(coins)
 
 	views := make([]viewCoin, 0, len(sorted))
 	for i, c := range sorted {
