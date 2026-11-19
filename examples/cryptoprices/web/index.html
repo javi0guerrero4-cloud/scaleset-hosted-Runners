@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Crypto Prices</title>
+  <meta name="description" content="Live cryptocurrency spot prices in USD." />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f7931a'/%3E%3Ctext x='16' y='23' font-family='sans-serif' font-size='19' font-weight='bold' text-anchor='middle' fill='%231a1206'%3E%E2%82%BF%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+  <div class="glow" aria-hidden="true"></div>
+
+  <div class="page">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">₿</span>
+        <div class="brand-text">
+          <h1>Crypto Prices</h1>
+          <p>Live spot prices in USD</p>
+        </div>
+      </div>
+      <div class="status" id="status" role="status">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="status-text">Connecting…</span>
+      </div>
+    </header>
+
+    <div class="banner" id="banner" hidden></div>
+
+    <main>
+      <section class="grid" id="grid" aria-label="Cryptocurrency prices"></section>
+      <div class="empty" id="empty">
+        <span class="spinner" aria-hidden="true"></span>
+        <p>Loading live prices…</p>
+      </div>
+    </main>
+
+    <footer class="foot">
+      <span>Prices refresh automatically.</span>
+      <span>Data from CoinGecko · Not financial advice</span>
+    </footer>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

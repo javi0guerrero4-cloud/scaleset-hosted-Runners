@@ -1,0 +1,34 @@
+# Base44 development environment for the crypto price dashboard.
+#
+# The app is a standalone Go program in examples/cryptoprices (its own Go
+# module, no third-party dependencies). The repo is bind-mounted and `air`
+# rebuilds/restarts the server on source changes, so edits show up without an
+# image rebuild. The image only carries the Go toolchain and air.
+name: base44-cryptoprices
+
+services:
+  web:
+    build:
+      context: ./examples/cryptoprices
+      dockerfile: Dockerfile
+    working_dir: /app/examples/cryptoprices
+    command: ["air", "-c", ".air.toml"]
+    volumes:
+      - ./:/app
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - COINS=${COINS:-bitcoin,ethereum,solana,binancecoin,ripple,cardano,dogecoin,avalanche-2,chainlink,polkadot,litecoin,tron}
+      - REFRESH_SECONDS=${REFRESH_SECONDS:-60}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: on-failure
+    labels:
+      base44.project: "Crypto Prices"
+      base44.kind: "web"
+      base44.port: "3000"
